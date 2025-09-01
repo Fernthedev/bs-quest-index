@@ -18,6 +18,20 @@ impl FileRepo {
         }
     }
 
+    pub async fn remove_file(&self, id: String, ver: Version) -> Result<()> {
+        self.cache.write().await.remove(&(id.clone(), ver.clone()));
+
+        let file = self
+            .path
+            .join(&id)
+            .join(format!("{}/{}/{}", &ver.major, &ver.minor, &ver.patch));
+        if fs::metadata(&file).await.is_ok() {
+            fs::remove_file(file).await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn get_file(&self, id: String, ver: Version) -> Result<String> {
         if let Some(o) = self.cache.read().await.get(&(id.clone(), ver.clone())) {
             return Ok(o.clone());

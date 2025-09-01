@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     db::{Mod, PublishKey},
     errors::TryExt,
-    file_repo::FileRepo,
+    file_repo::{self, FileRepo},
 };
 use bytes::Bytes;
 use semver::{Version, VersionReq};
@@ -10,8 +10,8 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use tokio::fs;
 use warp::{
-    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
     Filter, Rejection, Reply,
+    http::{HeaderValue, StatusCode, header::CONTENT_TYPE},
 };
 
 #[inline]
@@ -68,7 +68,7 @@ pub fn handler(
     let delete = warp::path!(String / Version)
         .and(warp::delete())
         .and(auth_admin(config))
-        .and_then(move |id, ver| delete(id, ver, pool, config));
+        .and_then(move |id, ver| delete(id, ver, pool, config, file_repo));
     // POST /publish_key {key}
     let add_key = warp::path!("publish_key")
         .and(warp::post())
@@ -166,11 +166,7 @@ async fn resolve(
 #[tracing::instrument(level = "debug", skip(file_repo))]
 async fn download(id: String, ver: Version, file_repo: &FileRepo) -> Result<impl Reply, Rejection> {
     let contents = file_repo.get_file(id, ver).await.or_nf()?;
-    let reply = warp::reply::with_header(
-        contents,
-        CONTENT_TYPE,
-        "application/json; charset=utf-8",
-    );
+    let reply = warp::reply::with_header(contents, CONTENT_TYPE, "application/json; charset=utf-8");
     Ok(reply)
 }
 
@@ -191,12 +187,13 @@ async fn upload(
     Ok(warp::reply::with_status("", StatusCode::CREATED))
 }
 
-#[tracing::instrument(level = "debug", skip(pool, config))]
+#[tracing::instrument(level = "debug", skip(pool, config, file_repo))]
 async fn delete(
     id: String,
     ver: Version,
     pool: &SqlitePool,
     config: &Config,
+    file_repo: &FileRepo,
 ) -> Result<impl Reply, Rejection> {
     let mut dir = config
         .downloads_path
@@ -213,6 +210,8 @@ async fn delete(
         dir = dir.parent().or_ise()?.to_path_buf();
     }
     Mod::delete(&id, &ver, pool).await.or_nf()?;
+
+    file_repo.remove_file(id, ver).await.or_nf()?;
 
     Ok(warp::reply::with_status("", StatusCode::OK))
 }
